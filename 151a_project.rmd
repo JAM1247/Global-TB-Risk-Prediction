@@ -1,0 +1,191 @@
+---
+title: "STAT 151A Group Project Proposal"
+author:
+  - "Rachel Xu"
+  - "Jamshaid Ali"
+  - "Aaron Cho"
+date: "`r format(Sys.Date(), '%B %d, %Y')`"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  message   = FALSE,
+  warning   = FALSE,
+  out.width = "70%",      
+  fig.align = "center",
+  dev       = "pdf",
+  options(digits = 3)
+)
+library(carData)
+library(Stat2Data)
+library(ggplot2)
+library(dplyr)
+library(broom)
+library(car)
+library(performance)
+library(MASS)      
+library(leaps)  
+library(caret)
+library(WDI)
+library(tidyverse)
+```
+
+**1. Introduction**
+
+Tuberculosis (TB) is one of the world’s most persistent infectious diseases, and has substantial variation in incidence rates across different countries. Understanding which factors contribute most to this variation would be important for improving global public health planning, targeting interventions, and monitoring progress toward disease-control goals.
+
+In this project, we develop a multiple linear regression model using publicly available international health and economic data to predict a country’s TB incidence rate. Our goal is to identify which population-level variables best explain variation in TB outcomes and to evaluate whether socio-economic or medical factors contribute more strongly.
+
+
+**2. Research Question**
+
+*How do GDP per capita, BCG vaccination coverage, and HIV prevalence jointly predict national TB incidence rates?*
+
+
+```{r,,echo=FALSE}
+#load indicator from WDI package
+vars <- c(
+  TB  = "SH.TBS.INCD",            # TB incidence
+  HIV = "SH.DYN.AIDS.ZS",         # HIV prevalence
+  GDP = "NY.GDP.PCAP.CD",         # GDP per capita
+  HEC = "SH.XPD.CHEX.PC.CD",      # Health expenditure per capita
+  PPD = "EN.POP.DNST",            # Population density
+  URB = "SP.URB.TOTL.IN.ZS",      # Urbanization
+  UND =  "SN.ITK.DEFC.ZS",        # Undernourishment
+  SMP = "SH.PRV.SMOK",            # Smoking prevalence
+  EDU = "SE.ADT.LITR.ZS"         # Literacy rate
+)
+
+tb_data <- WDI(country = "all", indicator = vars, start = 2022, end = 2022) 
+```
+
+
+```{r,echo=FALSE}
+#adding BCG as new predictor to the dataset
+bcg <- read_csv("WB_HCP_VACBCG.csv")
+bcg_1 <- bcg[,c("REF_AREA","TIME_PERIOD", "OBS_VALUE")]
+bcg_2022 <- bcg_1 %>% 
+  filter(TIME_PERIOD == 2022) %>% 
+   rename(iso3c  = REF_AREA,
+          BCG = OBS_VALUE,
+          year = TIME_PERIOD
+          )
+tb_merge <- tb_data %>% 
+  left_join(bcg_2022, by = c("iso3c", "year"))
+```
+
+**3.Dataset Description**
+
+Our analysis uses a cross-sectional dataset combining indicators from the World Bank World Development Indicators (WDI) for the year 2022. The dataset includes 266 countries and regions, each with a consistent country identifier and a set of epidemiological, demographic, and economic variables relevant to tuberculosis (TB) incidence.
+
+**Variables Used**
+
+country – Country or region name
+
+iso2c, iso3c – ISO country codes
+
+year – All variables refer to 2022
+
+TB – Tuberculosis incidence per 100,000 population
+
+HIV – HIV prevalence (% adults ages 15–49)
+
+GDP – GDP per capita (current USD)
+
+BCG – BCG vaccination coverage (% of infants)
+
+HEC – Health expenditure per capita (USD)
+
+URB – Urban population (% of total)
+
+PPD – Population density (people per sq. km)
+
+UND – Undernourishment prevalence (%)
+
+SMP – Severe multidimensional poverty (%)
+
+EDU – Schooling/education indicator
+
+These variables represent biological, socioeconomic, and healthcare dimensions relevant to TB epidemiology.
+
+
+```{r,echo=FALSE}
+tb_clean <- tb_merge %>% 
+  filter(str_detect(iso2c, "^[A-Z]{2}$")) %>%
+  mutate(across(c(TB, HIV, GDP, HEC, PPD, URB, UND, SMP, EDU, BCG),
+                as.numeric)) %>%
+  filter(
+    !is.na(TB), !is.na(HIV), !is.na(GDP), !is.na(HEC),
+    !is.na(PPD), !is.na(URB), !is.na(UND), !is.na(EDU),
+    !is.na(BCG),
+    TB  > 0,
+    GDP > 0,
+    HEC > 0
+  ) %>%
+  mutate(
+    log_TB  = log(TB),
+    log_GDP = log(GDP),
+    log_HEC = log(HEC),
+    log_PPD = log(PPD + 1) 
+  )
+
+head(tb_clean)
+```
+
+**4. Methods**
+
+**4.1Data Sources and Integration**
+
+Indicators including TB incidence, HIV prevalence, GDP per capita, population density, and urbanization were downloaded using the WDI R package for 2022.
+
+BCG vaccination coverage for 2022 was loaded separately from the World Bank BCG Immunization Coverage dataset.
+Datasets were merged using ‘iso3c’and cleaned by:
+
+removing aggregate regions (e.g., "Arab World"),
+
+retaining countries with complete TB incidence data,
+
+checking variable distributions for skewness and outliers.
+
+The merged dataset provides a comprehensive foundation for modeling global TB incidence.
+
+**4.2Statistical Modeling Plan**
+
+**4.2.1 Model**
+
+We plan to begin with a multiple linear regression of the form:
+
+$$TB=\beta_0+\beta_1(HIV)+\beta_2(GDP)+\beta_3(HEC)+\beta_4(BCG)+\beta_5(URB)+\epsilon$$
+
+Additional predictors such as population density, undernourishment, health expenditure, and education may be included based on diagnostics and theoretical justification.
+
+Because TB incidence is right-skewed, we will consider a log-transformed outcome to improve linearity and residual behavior.
+
+**4.2.2 Diagnostic Workflow**
+
+We will evaluate model assumptions using:
+
+Residual vs fitted plots to linearity and examine heteroskedasticity
+
+Q-Q plots for normality of residuals
+
+Variance inflation factors to detect multicollinearity
+
+Adjusted R² , AIC and cross-validation for model comparison
+
+We will compare a full model and reduced models, prioritizing epidemiological interpretability over purely statistical criteria.
+
+**Correlation Between Variables**
+```{r,echo=FALSE}
+pairs(~ log_TB + log_GDP + HIV + BCG + log_HEC + PPD + URB + UND + EDU,
+      data = tb_clean, panel = panel.smooth,pch = 19, cex = 0.6)
+```
+
+
+```{r,echo=FALSE}
+m1 <- lm(log_TB ~ log_GDP + HIV + BCG + log_HEC + PPD + URB + UND + EDU,data = tb_clean)
+```
+
+
+
