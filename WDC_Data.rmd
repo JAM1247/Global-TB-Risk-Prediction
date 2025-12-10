@@ -1,0 +1,221 @@
+---
+title: "TB Incidence Analysis: Data Processing and Exploration"
+author: "Jamshaid Ali"
+date: "2025-12-10"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+This document processes and explores tuberculosis (TB) incidence data alongside socioeconomic and health indicators from the World Bank for the year 2022. The goal is to prepare data for multiple linear regression modeling to understand factors predicting national TB incidence rates.
+
+## Load Required Libraries
+```{r load-libraries}
+library(WDI)
+library(tidyverse)
+library(corrplot)
+library(GGally)
+```
+
+## Data Collection
+```{r data-collection}
+# Define indicators for WDI download
+# Note: SMP (Severe Multidimensional Poverty) is excluded due to lack of 2022 data
+indicators <- c(
+  TB = "SH.TBS.INCD",           # TB incidence per 100,000
+  HIV = "SH.DYN.AIDS.ZS",        # HIV prevalence (% ages 15-49)
+  GDP = "NY.GDP.PCAP.CD",        # GDP per capita (current USD)
+  HEC = "SH.XPD.CHEX.PC.CD",     # Health expenditure per capita (USD)
+  PPD = "EN.POP.DNST",           # Population density (people per sq km)
+  URB = "SP.URB.TOTL.IN.ZS",     # Urban population (% of total)
+  UND = "SN.ITK.DEFC.ZS",        # Undernourishment prevalence (%)
+  EDU = "SE.SEC.ENRR"            # School enrollment, secondary (%)
+)
+
+# Download WDI data for 2022
+wdi_data <- WDI(
+  country = "all",
+  indicator = indicators,
+  start = 2022,
+  end = 2022,
+  extra = TRUE
+)
+```
+
+## Data Cleaning and Processing
+```{r data-cleaning}
+# Clean the data
+tb_data <- wdi_data %>%
+  # Remove aggregate regions
+  filter(region != "Aggregates") %>%
+  # Keep only countries with complete TB data
+  filter(!is.na(TB)) %>%
+  # Select relevant columns (SMP excluded as it's not available for 2022)
+  select(country, iso2c, iso3c, year, TB, HIV, GDP, HEC, PPD, URB, UND, EDU) %>%
+  # Create log-transformed variables for skewed predictors
+  mutate(
+    log_TB = log(TB),
+    log_GDP = log(GDP),
+    log_HEC = log(HEC),
+    log_PPD = log(PPD)
+  ) %>%
+  # Remove any rows with missing values in key variables
+  drop_na(TB, HIV, GDP)
+
+# Save cleaned dataset immediately after processing
+write_csv(tb_data, "tb_data_cleaned.csv")
+cat("✓ Cleaned data saved to: tb_data_cleaned.csv\n")
+cat("✓ Dataset contains", nrow(tb_data), "countries\n\n")
+
+# Display first few rows
+head(tb_data)
+```
+
+## Data Summary
+```{r data-summary}
+# Summary statistics
+summary(tb_data)
+
+# Dataset dimensions
+cat("\nDataset dimensions:", nrow(tb_data), "countries x", ncol(tb_data), "variables\n")
+
+# Check for remaining missing values
+cat("\nMissing values per variable:\n")
+print(colSums(is.na(tb_data)))
+```
+
+## Exploratory Data Analysis
+
+### Distribution of TB Incidence
+```{r tb-distribution, fig.width=10, fig.height=4}
+par(mfrow = c(1, 2))
+
+# Original scale
+hist(tb_data$TB, 
+     main = "TB Incidence Distribution",
+     xlab = "TB Incidence per 100,000",
+     col = "steelblue",
+     breaks = 30)
+
+# Log scale
+hist(tb_data$log_TB,
+     main = "Log TB Incidence Distribution",
+     xlab = "log(TB Incidence)",
+     col = "coral",
+     breaks = 30)
+```
+
+The TB incidence is highly right-skewed, which justifies using a log transformation for modeling.
+
+### Key Predictors Distribution
+```{r predictors-distribution, fig.width=10, fig.height=8}
+# Select key variables for visualization
+key_vars <- tb_data %>%
+  select(HIV, GDP, HEC, PPD, URB)
+
+# Create histograms
+par(mfrow = c(2, 3))
+for(var in names(key_vars)) {
+  hist(key_vars[[var]], 
+       main = paste("Distribution of", var),
+       xlab = var,
+       col = "lightblue",
+       breaks = 20)
+}
+```
+
+### Correlation Analysis
+```{r correlation-matrix, fig.width=10, fig.height=8}
+# Select numeric variables for correlation
+cor_vars <- tb_data %>%
+  select(log_TB, HIV, log_GDP, log_HEC, PPD, URB) %>%
+  drop_na()
+
+# Compute correlation matrix
+cor_matrix <- cor(cor_vars)
+
+# Visualize correlation matrix
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Correlation Matrix of Key Variables",
+         mar = c(0, 0, 2, 0))
+```
+
+### Relationship Between TB and Key Predictors
+```{r tb-relationships, fig.width=12, fig.height=10}
+# Create scatter plots
+plot_data <- tb_data %>%
+  select(log_TB, HIV, log_GDP, log_HEC, URB) %>%
+  drop_na()
+
+ggpairs(plot_data,
+        title = "Pairwise Relationships: TB Incidence and Predictors",
+        lower = list(continuous = wrap("points", alpha = 0.5, size = 0.8)),
+        diag = list(continuous = wrap("densityDiag", alpha = 0.5)))
+```
+
+### TB Incidence by GDP Per Capita
+```{r tb-gdp-plot, fig.width=10, fig.height=6}
+ggplot(tb_data, aes(x = GDP, y = TB)) +
+  geom_point(aes(color = HIV, size = URB), alpha = 0.6) +
+  geom_smooth(method = "loess", se = TRUE, color = "darkred") +
+  scale_x_log10(labels = scales::comma) +
+  scale_y_log10() +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(title = "TB Incidence vs GDP Per Capita",
+       subtitle = "Point size represents urbanization %, color represents HIV prevalence",
+       x = "GDP Per Capita (USD, log scale)",
+       y = "TB Incidence per 100,000 (log scale)",
+       color = "HIV %",
+       size = "Urban %") +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+### TB Incidence by HIV Prevalence
+```{r tb-hiv-plot, fig.width=10, fig.height=6}
+ggplot(tb_data, aes(x = HIV, y = TB)) +
+  geom_point(aes(color = log_GDP), alpha = 0.6, size = 2) +
+  geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+  scale_y_log10() +
+  scale_color_gradient(low = "lightblue", high = "darkgreen", 
+                       name = "log(GDP)") +
+  labs(title = "TB Incidence vs HIV Prevalence",
+       subtitle = "Color represents GDP per capita (log scale)",
+       x = "HIV Prevalence (% ages 15-49)",
+       y = "TB Incidence per 100,000 (log scale)") +
+  theme_minimal()
+```
+
+### Top 20 Countries by TB Incidence
+```{r top-countries, fig.width=10, fig.height=8}
+top_tb <- tb_data %>%
+  arrange(desc(TB)) %>%
+  head(20)
+
+ggplot(top_tb, aes(x = reorder(country, TB), y = TB)) +
+  geom_col(aes(fill = HIV), alpha = 0.8) +
+  coord_flip() +
+  scale_fill_gradient(low = "yellow", high = "red") +
+  labs(title = "Top 20 Countries by TB Incidence (2022)",
+       x = "Country",
+       y = "TB Incidence per 100,000",
+       fill = "HIV %") +
+  theme_minimal()
+```
+
+## Summary
+
+The dataset includes `r nrow(tb_data)` countries with complete TB incidence data for 2022. Key findings from exploratory analysis:
+
+- TB incidence is highly right-skewed, supporting log transformation
+- Strong negative correlation between GDP and TB incidence
+- Positive correlation between HIV prevalence and TB incidence
+- Geographic and economic factors show meaningful relationships with TB outcomes
