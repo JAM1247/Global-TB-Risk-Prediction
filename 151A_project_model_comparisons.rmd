@@ -1,0 +1,372 @@
+---
+title: "Untitled"
+output:
+  pdf_document: default
+  html_document: default
+date: "2025-12-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+```
+
+## Introduction
+
+This document processes and explores tuberculosis (TB) incidence data alongside socioeconomic and health indicators from the World Bank for the year 2022. The goal is to prepare data for multiple linear regression modeling to understand factors predicting national TB incidence rates.
+
+## Load Required Libraries
+```{r load-libraries,echo=FALSE}
+library(WDI)
+library(tidyverse)
+library(corrplot)
+library(dplyr)
+library(GGally)
+library(car)
+```
+
+## Data Collection
+```{r data-collection,echo=FALSE}
+# Define indicators for WDI download
+# Note: SMP (Severe Multidimensional Poverty) is excluded due to lack of 2022 data
+indicators <- c(
+  TB = "SH.TBS.INCD",           # TB incidence per 100,000
+  HIV = "SH.DYN.AIDS.ZS",        # HIV prevalence (% ages 15-49)
+  GDP = "NY.GDP.PCAP.CD",        # GDP per capita (current USD)
+  HEC = "SH.XPD.CHEX.PC.CD",     # Health expenditure per capita (USD)
+  PPD = "EN.POP.DNST",           # Population density (people per sq km)
+  URB = "SP.URB.TOTL.IN.ZS",     # Urban population (% of total)
+  UND = "SN.ITK.DEFC.ZS",        # Undernourishment prevalence (%)
+  SMP = "SH.PRV.SMOK",           #Smoking Prevalence
+  SAN = "SH.STA.BASS.ZS",       # Sanitation access (% of population)
+  EDU = "SE.SEC.ENRR",          # School enrollment, secondary (%)
+  IMR = "SH.DYN.MORT"          # Infant mortality rate (per 1,000 live births)
+)
+
+# Download WDI data for 2022
+wdi_data <- WDI(
+  country = "all",
+  indicator = indicators,
+  start = 2022,
+  end = 2022,
+  extra = TRUE
+)
+head(wdi_data)
+```
+
+## Data Cleaning and Processing
+```{r data-cleaning}
+tb_data <- wdi_data %>%
+  filter(!is.na(TB)) %>%
+  dplyr::select(country, region, iso2c, iso3c, year, TB, HIV, GDP, HEC, PPD, URB, UND, EDU, SMP, SAN, IMR) %>%
+  dplyr::mutate(
+    log_TB  = log(TB),
+    log_GDP = log(GDP),
+    log_HEC = log(HEC),
+    log_PPD = log(PPD)
+  ) %>%
+  tidyr::drop_na()
+
+head(tb_data)
+
+
+```
+```{r,echo=FALSE}
+# Save cleaned dataset
+readr::write_csv(tb_data, "tb_data_cleaned.csv")
+cat("Cleaned data saved to: tb_data_cleaned.csv\n")
+cat("Dataset contains", nrow(tb_data), "rows\n\n")
+```
+
+## Data Summary
+```{r data-summary}
+# Summary statistics
+summary(tb_data)
+
+# Dataset dimensions
+cat("\nDataset dimensions:", nrow(tb_data), "countries x", ncol(tb_data), "variables\n")
+
+# Check for remaining missing values
+cat("\nMissing values per variable:\n")
+print(colSums(is.na(tb_data)))
+```
+
+## Exploratory Data Analysis
+
+### Distribution of TB Incidence
+```{r tb-distribution, fig.width=10, fig.height=4,echo=FALSE}
+par(mfrow = c(1, 2))
+
+# Original scale
+hist(tb_data$TB, 
+     main = "TB Incidence Distribution",
+     xlab = "TB Incidence per 100,000",
+     col = "steelblue",
+     breaks = 30)
+
+# Log scale
+hist(tb_data$log_TB,
+     main = "Log TB Incidence Distribution",
+     xlab = "log(TB Incidence)",
+     col = "coral",
+     breaks = 30)
+```
+
+The TB incidence is highly right-skewed, which justifies using a log transformation for modeling.
+
+### Key Predictors Distribution
+```{r predictors-distribution, fig.width=10, fig.height=8,echo=FALSE}
+# Select key variables for visualization
+key_vars <- tb_data %>%
+  dplyr::select(HIV, GDP, HEC, PPD, URB)
+
+# Create histograms
+par(mfrow = c(2, 3))
+for(var in names(key_vars)) {
+  hist(key_vars[[var]], 
+       main = paste("Distribution of", var),
+       xlab = var,
+       col = "lightblue",
+       breaks = 20)
+}
+```
+
+### Correlation Analysis
+```{r correlation-matrix, fig.width=10, fig.height=8,echo=FALSE}
+# Select numeric variables for correlation
+cor_vars <- tb_data %>%
+  dplyr::select(log_TB, HIV, log_GDP, log_HEC, PPD, URB) %>%
+  drop_na()
+
+# Compute correlation matrix
+cor_matrix <- cor(cor_vars)
+
+# Visualize correlation matrix
+corrplot(cor_matrix, 
+         method = "color",
+         type = "upper",
+         addCoef.col = "black",
+         tl.col = "black",
+         tl.srt = 45,
+         title = "Correlation Matrix of Key Variables",
+         mar = c(0, 0, 2, 0))
+```
+
+### Relationship Between TB and Key Predictors
+```{r tb-relationships, fig.width=12, fig.height=10,echo=FALSE}
+# Create scatter plots
+plot_data <- tb_data %>%
+  dplyr::select(log_TB, HIV, log_GDP, log_HEC, URB) %>%
+  drop_na()
+
+ggpairs(plot_data,
+        title = "Pairwise Relationships: TB Incidence and Predictors",
+        lower = list(continuous = wrap("points", alpha = 0.5, size = 0.8)),
+        diag = list(continuous = wrap("densityDiag", alpha = 0.5)))
+```
+
+### TB Incidence by GDP Per Capita
+```{r tb-gdp-plot, fig.width=10, fig.height=6,echo=FALSE}
+ggplot(tb_data, aes(x = GDP, y = TB)) +
+  geom_point(aes(color = HIV, size = URB), alpha = 0.6) +
+  geom_smooth(method = "loess", se = TRUE, color = "darkred") +
+  scale_x_log10(labels = scales::comma) +
+  scale_y_log10() +
+  scale_color_gradient(low = "blue", high = "red") +
+  labs(title = "TB Incidence vs GDP Per Capita",
+       subtitle = "Point size represents urbanization %, color represents HIV prevalence",
+       x = "GDP Per Capita (USD, log scale)",
+       y = "TB Incidence per 100,000 (log scale)",
+       color = "HIV %",
+       size = "Urban %") +
+  theme_minimal() +
+  theme(legend.position = "right")
+```
+
+### TB Incidence by HIV Prevalence
+```{r tb-hiv-plot, fig.width=10, fig.height=6,echo=FALSE}
+# ggplot(tb_data, aes(x = HIV, y = TB)) +
+#   geom_point(aes(color = log_GDP), alpha = 0.6, size = 2) +
+#   geom_smooth(method = "lm", se = TRUE, color = "darkblue") +
+#   scale_y_log10() +
+#   scale_color_gradient(low = "lightblue", high = "darkgreen", 
+#                        name = "log(GDP)") +
+#   labs(title = "TB Incidence vs HIV Prevalence",
+#        subtitle = "Color represents GDP per capita (log scale)",
+#        x = "HIV Prevalence (% ages 15-49)",
+#        y = "TB Incidence per 100,000 (log scale)") +
+#   theme_minimal()
+```
+
+### Top 20 Countries by TB Incidence
+```{r top-countries, fig.width=10, fig.height=8,echo=FALSE}
+# top_tb <- tb_data %>%
+#   arrange(desc(TB)) %>%
+#   head(20)
+# 
+# ggplot(top_tb, aes(x = reorder(country, TB), y = TB)) +
+#   geom_col(aes(fill = HIV), alpha = 0.8) +
+#   coord_flip() +
+#   scale_fill_gradient(low = "yellow", high = "red") +
+#   labs(title = "Top 20 Countries by TB Incidence (2022)",
+#        x = "Country",
+#        y = "TB Incidence per 100,000",
+#        fill = "HIV %") +
+#   theme_minimal()
+```
+
+## Summary
+
+The dataset includes `r nrow(tb_data)` countries with complete TB incidence data for 2022. Key findings from exploratory analysis:
+
+- TB incidence is highly right-skewed, supporting log transformation
+- Strong negative correlation between GDP and TB incidence
+- Positive correlation between HIV prevalence and TB incidence
+- Geographic and economic factors show meaningful relationships with TB outcomes
+
+
+##Rachel'S Work
+## Split the data set to training and testing
+```{r}
+set.seed(123)
+train_index <- sample(1:nrow(tb_data), 0.7*nrow(tb_data))
+train <- tb_data[train_index, ]
+test  <- tb_data[-train_index, ]
+```
+
+## Use Training set to build model
+# Fit the full model, use log transformation
+```{r}
+# Fit the full model with TB as the dependent variable
+full_model <- lm(log(TB) ~ HIV + log_GDP  + log_HEC + log_PPD + URB + UND + SMP + SAN + EDU + IMR + region, data = train)
+summary(full_model)
+```
+
+## Diagnosis full model
+# Residual vs Fitted Plot
+```{r,echo=FALSE}
+#residual vs Fitted Plot
+plot(full_model, which=1)
+```
+Residual vs Fitted Plot shows log transformation worked, no major non-linear patterns, indicating that the log transformation and linear specification are reasonable.However, there is evidence of mild heteroskedasticity, with larger residual spread at both low and high fitted values.This suggests that variance is not fully explained by the current predictors.
+
+# Q-Q Plot
+```{r,echo=FALSE}
+# Q-Q Plot
+plot(full_model, which=2)
+```
+
+The full model residuals are approximately normal in the central region.
+But there are deviations in the tails → minor violation of normality.
+Outliers are present.
+
+## Build reduce model for model comparisons
+# Build Reduce model with VIF
+```{r,echo=FALSE}
+# Calculate VIF
+vif(full_model)
+```
+Predictor we consider:
+HIV: low VIF but highly significant, and strong epidemiological link with TB
+log_HEC: log_HEC OR log_GDP are high collinearity, only need pick one. log_HEC is more directly relevant to TB control
+log_PPD: population density is low VIF, but relevant theoretically for airborne diseases
+region: low VIF after transformation, but captures unobserved heterogeneity, significant in full model
+SAN:  sanitation is borderline significant, related to general public health infrastructure
+
+$$log(TB) = HIV + logHEC + logPPD + SAN + region$$
+
+```{r,echo=TRUE}
+#reduce model by VIF
+red_model1 <- lm(log(TB) ~ HIV + log_HEC + log_PPD + SAN + region, data = train)
+summary(red_model1)
+```
+
+# Reduce model with Key Predictors by Correlation Analysis
+By early Correlation Analysis, we picked key predictors to build reduce model
+$$log(TB) = HIV + logGDP + logHEC + URB$$
+
+```{r,echo=TRUE}
+red_model2 <- lm(log(TB) ~ HIV + log_GDP + log_HEC + URB, data = train)
+```
+
+
+# Model slection by AIC 
+The AIC selection you performed used both forward and backward stepwise selection.
+```{r}
+library(MASS)
+step_model <- stepAIC(full_model, direction = "both", trace = FALSE)
+formula(step_model)
+summary(step_model)
+```
+
+## Residuals fitted plot for all OLS models
+```{r,echo=FALSE}
+par(mfrow = c(2, 2))   # 1 row, 2 columns
+plot(full_model, which = 1, main = "Full Model Residuals")
+plot(red_model1, which = 1, main = "Reduced(VIF) Model Residuals")
+plot(red_model2, which = 1, main = "Reduced(KEY) Model Residuals")
+plot(step_model, which = 1, main = "Reduced(AIC) Model Residuals" )
+```
+
+## Compare AIC for OLS model
+```{r,echo=FALSE}
+aic_full <- AIC(full_model)
+aic_red1 <- AIC(red_model1)
+aic_red2 <- AIC(red_model2)
+aic_step <- AIC(step_model)
+
+cat("Full Model AIC:     ", aic_full, "\n")
+cat("Reduced 1 AIC:      ", aic_red1, "\n")
+cat("Reduced 2 AIC:      ", aic_red2, "\n")
+cat("Stepwise AIC Model: ", aic_step, "\n")
+
+```
+
+
+Base on the AIC, the best model is stepwise model we choose by AIC
+
+## LASSO Model
+```{r}
+library(glmnet)
+# design matrix (drop intercept)
+x_train <- model.matrix(full_model)[, -1]  
+y_train <- train$log_TB
+
+#select the best lambda (shrinkage strength)
+lasso_cv <- cv.glmnet(x_train, y_train, alpha = 1)
+
+#fit the lasso model
+lasso_model <- glmnet(x_train, y_train, alpha = 1, lambda = lasso_cv$lambda.min)
+```
+
+## Use RMES for model comparisons
+```{r,echo=FALSE}
+#calculate RMES
+# FULL MODEL
+pred_full <- predict(full_model, newdata=test)
+rmse_full <- sqrt(mean((test$log_TB - pred_full)^2))
+
+# REDUCED MODEL 1
+pred_red1 <- predict(red_model1, newdata=test)
+rmse_red1 <- sqrt(mean((test$log_TB - pred_red1)^2))
+
+# REDUCED MODEL 2
+pred_red2 <- predict(red_model2, newdata=test)
+rmse_red2 <- sqrt(mean((test$log_TB - pred_red2)^2))
+
+# STEPWISE AIC MODEL
+pred_step <- predict(step_model, newdata=test)
+rmse_step <- sqrt(mean((test$log_TB - pred_step)^2))
+
+# LASSO MODEL
+x_test <- model.matrix(full_model, test)[, -1]
+pred_lasso <- predict(lasso_model, newx=x_test)
+rmse_lasso <- sqrt(mean((test$log_TB - pred_lasso)^2))
+
+cat("Full Model RMSE:     ", rmse_full, "\n")
+cat("Reduced 1 RMSE:      ", rmse_red1, "\n")
+cat("Reduced 2 RMSE:      ", rmse_red2, "\n")
+cat("Stepwise AIC RMSE:   ", rmse_step, "\n")
+cat("LASSO RMSE:          ", rmse_lasso, "\n")
+
+```
+Reduce model 2 has the lowest RMSE, but Stepwise model has the lowest AIC
