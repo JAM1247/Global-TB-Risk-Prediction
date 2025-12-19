@@ -57,24 +57,18 @@ head(wdi_data)
 ```{r data-cleaning}
 tb_data <- wdi_data %>%
   filter(!is.na(TB)) %>%
-  dplyr::select(country, region, iso2c, iso3c, year, TB, HIV, GDP, HEC, PPD, URB, UND, EDU, SMP, SAN, IMR) %>%
+  dplyr::select(country, region, iso2c, iso3c, year, TB, HIV, GDP, HEC, PPD, URB, SMP, SAN, IMR) %>%
   dplyr::mutate(
     log_TB  = log(TB),
     log_GDP = log(GDP),
     log_HEC = log(HEC),
     log_PPD = log(PPD)
   ) %>%
-  tidyr::drop_na()
+  tidyr::drop_na() 
 
-head(tb_data)
-
-
-```
-```{r,echo=FALSE}
-# Save cleaned dataset
 readr::write_csv(tb_data, "tb_data_cleaned.csv")
-cat("Cleaned data saved to: tb_data_cleaned.csv\n")
-cat("Dataset contains", nrow(tb_data), "rows\n\n")
+
+cat("Dataset contains", nrow(tb_data), "rows and has been saved to your folder.\n")
 ```
 
 ## Data Summary
@@ -237,7 +231,7 @@ test  <- tb_data[-train_index, ]
 # Fit the full model, use log transformation
 ```{r}
 # Fit the full model with TB as the dependent variable
-full_model <- lm(log(TB) ~ HIV + log_GDP  + log_HEC + log_PPD + URB + UND + SMP + SAN + EDU + IMR + region, data = train)
+full_model <- lm(log(TB) ~ HIV + log_GDP  + log_HEC + log_PPD + URB + SMP + SAN + IMR + region, data = train)
 summary(full_model)
 ```
 
